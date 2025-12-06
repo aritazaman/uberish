@@ -1,0 +1,40 @@
+services:
+  user:
+    build:
+      context: .
+      dockerfile: users/Dockerfile.users
+    ports:
+      - "9000:5000"
+    networks:
+      - zamanari
+  availability:
+    build:
+      context: ./availability
+      dockerfile: Dockerfile.availability
+    ports:
+      - "9001:5000"
+    networks:
+      - zamanari
+  reservations:
+    build:
+      context: ./reservations 
+      dockerfile: Dockerfile.reservations
+    ports:
+      - "9002:5000"
+    networks:
+      - zamanari
+  payments:
+    build:
+      context: .
+      dockerfile: payments/Dockerfile.payments
+    ports:
+      - "9003:5000"
+    networks:
+      - zamanari
+
+networks:
+  zamanari:
+    driver: bridge
+
+
+    
