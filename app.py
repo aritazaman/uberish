@@ -5,17 +5,17 @@ from flask import Flask, request
 import hashlib
 import base64
 import hmac
-import requests
 
 app = Flask(__name__)
-db_name = "listings.db"
-sql_file = "listings.sql"
+db_name = "payments.db"
+sql_file = "payments.sql"
 db_flag = False
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-sql_file = os.path.join(BASE_DIR, "listings.sql")
-db_name = os.path.join(BASE_DIR, "listings.db")
+sql_file = os.path.join(BASE_DIR, "payments.sql")
+db_name = os.path.join(BASE_DIR, "payments.db")
 key_file = os.path.join(BASE_DIR, "key.txt")
+
 
 #from my project 1 and 2 user management
 @app.route('/clear', methods = (['GET']))
@@ -54,145 +54,145 @@ def get_db():
 def index():
 	conn = get_db()
 	cursor = conn.cursor()
-	cursor.execute("SELECT * FROM listing;")
+	cursor.execute("SELECT * FROM payments;")
 	result = cursor.fetchall()
 	conn.close()
 
 	return result
-## end 
 
-@app.route('/listing', methods=(['POST']))
-def listing():
-	global db_name
-	day = request.form['day']
-	price = request.form['price']
-	listingID = request.form['listingid']
-	token = request.headers.get('Authorization')
+@app.route('/add_initial', methods = (['POST']))
+def add_initial():
+	username = request.form.get('username')
+	amount = float(request.form.get('amount'))
+	cents = amount*100
 
 	conn = sqlite3.connect(db_name)
 	cursor = conn.cursor()
-
-	if token is None:
-		conn.close()
-		return json.dumps({"status": 2})
-	
-	# LOCALHOST VERSION
-	# verifyDriver = "http://localhost:9000/verify_driver"   
-	verifyDriver = "http://user:5000/verify_driver"
-
-	response = requests.get(
-		url = verifyDriver, headers = {"Authorization": token}
-	)
-
-	verify_data = response.json()
-
-	if verify_data["status"] != 1:
-		conn.close()
-		return json.dumps({"status": 2})
-	
-	username = verify_data["username"]
-
-	cents = int(float(price)*100)
-	
-	cursor.execute("INSERT INTO listing (username, day, cents, listingID) VALUES (?, ?, ?, ?)",(username, day, cents, listingID))
-	conn.commit()	
+	cursor.execute("INSERT INTO balances(username, balanceCents) VALUES (?, ?)", (username, cents))
+	conn.commit()
 	conn.close()
-
 	return json.dumps({"status": 1})
 
-@app.route('/search', methods=(['GET']))
-def search():
-	global db_name
-	day = request.args.get('day')
+@app.route('/get_balance', methods = (['GET']))
+def get_balance():
+	username = request.args.get('username')
+
+	if username is None:
+		return json.dumps({"status": 2, "balance": "NULL"})
+
+	conn = sqlite3.connect(db_name)
+	cursor = conn.cursor()
+
+	cursor.execute("SELECT balanceCents FROM balances WHERE username = ?", (username,))
+	row = cursor.fetchone()
+	conn.close()
+	
+	if row is None:
+		return json.dumps({"status": 2, "balance": "NULL"})
+	
+	balance_cents = row[0]                      
+	balance_str = "{:.2f}".format(float(balance_cents))
+
+	conn.close()
+	return json.dumps({"balance_inCents": balance_cents})
+
+@app.route('/transfer', methods = (['POST']))
+def transfer():
+	passenger = request.form.get('passenger')
+	driver = request.form.get('driver')
+	amount = request.form.get('amount')
+	amountCents = int(float(amount)*100)
+
+	conn = sqlite3.connect(db_name)
+	cursor = conn.cursor()
+	cursor.execute("UPDATE balances SET balanceCents = balanceCents - ? WHERE username = ?", (amountCents, passenger))
+	conn.commit()
+	cursor.execute("UPDATE balances SET balanceCents = balanceCents + ? WHERE username = ?", (amountCents, driver))
+	conn.commit()
+	conn.close()
+	return json.dumps({"status": 1})
+
+
+@app.route('/add', methods=(['POST']))
+def add_money():
+	token = request.headers.get('Authorization') 
+	amount_str = request.form.get('amount') 
+	amount = float(amount_str) 
+	cents = int(amount *100)
+
+	if amount_str is None:
+		return json.dumps({"status": 2})
+
+	conn = sqlite3.connect(db_name)
+	cursor = conn.cursor()
+	
+	if token is None: 
+		conn.close()
+		return json.dumps({"status": 2})
+	
+	header_b64, payload_b64, signature = token.split('.')
+
+	#verify JWT
+	with open('key.txt', 'r') as k:
+		key = k.read()
+	header_and_payload = header_b64 + "." + payload_b64
+	expectedSig = hmac.new(key.encode('utf-8'), header_and_payload.encode('utf-8'), hashlib.sha256).hexdigest()
+
+	if expectedSig != signature:
+		conn.close()
+		return json.dumps({"status": 2})
+	
+	#pull username from payload
+	payloadJSON = base64.urlsafe_b64decode(payload_b64).decode('utf-8')
+	payload_2 = json.loads(payloadJSON)
+	userFromPayload = payload_2.get('username')
+
+	#does user exist in balance?
+	cursor.execute("SELECT balanceCents FROM balances WHERE username = ?", (userFromPayload,))
+	if cursor.fetchone() is None:
+		conn.close()
+		return json.dumps({"status": 2})
+
+	cursor.execute("UPDATE balances SET balanceCents = balanceCents + ? WHERE username = ?", (cents, userFromPayload))
+	conn.commit()
+	conn.close()
+	return json.dumps({"status": 1})
+
+@app.route('/view', methods=(['GET']))
+def view_balance():
 	token = request.headers.get('Authorization')
 
 	conn = sqlite3.connect(db_name)
 	cursor = conn.cursor()
 
-	if token is None:
+	if token is None: 
 		conn.close()
 		return json.dumps({"status": 2})
 	
-	#only passenger can search	
+	header_b64, payload_b64, signature = token.split('.')
 
-	# verifyPassenger = "http://localhost:9000/verify_passenger"   
-	verifyPassenger = "http://user:5000/verify_passenger"
+	#verify JWT
+	with open('key.txt', 'r') as k:
+		key = k.read()
+	header_and_payload = header_b64 + "." + payload_b64
+	expectedSig = hmac.new(key.encode('utf-8'), header_and_payload.encode('utf-8'), hashlib.sha256).hexdigest()
 
-	response = requests.get(
-		url = verifyPassenger, headers = {"Authorization": token}
-	)
-
-	verify_data = response.json()
-
-	if verify_data["status"] != 1:
+	if expectedSig != signature:
 		conn.close()
 		return json.dumps({"status": 2})
 	
-	username = verify_data["username"]
-
-	cursor.execute("SELECT listingid, username, cents FROM listing WHERE day = ?", (day,))
-	rows = cursor.fetchall()
-
-	result = []
-
-	for listingid, driverUsername, price in rows: 
-		#get rating from users.sql
-		getRating = "http://user:5000/get_rating"
-		r = requests.get(url = getRating, params={"username": driverUsername})
-		rating_json = r.json()
-
-		rating = rating_json["rating"]
-		record = {
-			"listingid": listingid,
-			"price": f"{float(price)/100:.2f}",
-			"driver": driverUsername,
-			"rating": rating
-		}
-
-		result.append(record)
-	conn.close()
-	return json.dumps({"status": 1, "data": result})
+	#pull username from payload
+	payloadJSON = base64.urlsafe_b64decode(payload_b64).decode('utf-8')
+	payload_2 = json.loads(payloadJSON)
+	userFromPayload = payload_2.get('username')
 	
-	
-@app.route('/get_listing', methods=['GET'])
-def get_listing():
-	global db_name
-	listingID = request.args.get('listingid')
-
-	conn = sqlite3.connect(db_name)
-	cursor = conn.cursor()
-
-	cursor.execute("SELECT * FROM listing WHERE listingID = ?", (listingID,))
-	rows = cursor.fetchall()
-
-	#listing doesn't exist
-	if len(rows) == 0:
-		return json.dumps({"status": 2})
-	
-	row = rows[0]
-	driverUsername = row[0]
-	day = row[1]
-	cents = row[2]
-	listingID = row[3]
-	price = "{:.2f}".format(cents / 100)
+	cursor.execute("SELECT balanceCents FROM balances WHERE username = ?", (userFromPayload,)) 
+	row = cursor.fetchone() 
 	conn.close()
 
-	return json.dumps({"status": 1, "listingid": listingID, "day": day, "driver": driverUsername, "price": price, "cents": cents})
-
-@app.route('/remove_listing', methods=['POST'])
-def remove_listing():
-    global db_name
-    listingid = request.form.get('listingid')
-
-    #listingid missing
-    if listingid is None:
-        return json.dumps({"status": 2})
-
-    conn = sqlite3.connect(db_name)
-    cursor = conn.cursor()
-
-    cursor.execute("DELETE FROM listing WHERE listingID = ?", (listingid,))
-    conn.commit()
-    conn.close()
-
-    return json.dumps({"status": 1})
+	if row is None:
+		return json.dumps({"status": 2, "balance": "NULL"})
+	
+	cents = row[0]
+	dollars = f"{cents/100:.2f}"
+	return json.dumps({"status": 1, "balance": dollars})
